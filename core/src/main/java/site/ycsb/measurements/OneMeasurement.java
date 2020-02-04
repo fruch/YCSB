@@ -79,4 +79,12 @@ public abstract class OneMeasurement {
       exporter.write(getName(), "Return=" + entry.getKey().getName(), entry.getValue().get());
     }
   }
+
+  public final String getStatusCounts() {
+    String buckets = new String();
+    for (Map.Entry<Status, AtomicInteger> entry : returncodes.entrySet()) {
+      buckets += ", Return(" + entry.getKey().getName() + ")=" + entry.getValue().get();
+    }
+    return buckets;
+  }
 }

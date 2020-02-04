@@ -65,12 +65,23 @@ public class OneMeasurementHdrHistogram extends OneMeasurement {
    */
   private final boolean verbose;
   
+    /**
+   * The name of the property for determining if we should print out the buckets in summery.
+   */
+  public static final String PRINT_STATUSES_IN_SUMMARY_PROPERTY = "hdrhistogram.summary.addstatus";
+
+  /**
+   * Whether or not to emit the histogram buckets.
+   */
+  private final boolean addstatus;
+
   private final List<Double> percentiles;
 
   public OneMeasurementHdrHistogram(String name, Properties props) {
     super(name);
     percentiles = getPercentileValues(props.getProperty(PERCENTILES_PROPERTY, PERCENTILES_PROPERTY_DEFAULT));
     verbose = Boolean.valueOf(props.getProperty(VERBOSE_PROPERTY, String.valueOf(false)));
+    addstatus = Boolean.valueOf(props.getProperty(PRINT_STATUSES_IN_SUMMARY_PROPERTY, String.valueOf(false)));
     boolean shouldLog = Boolean.parseBoolean(props.getProperty("hdrhistogram.fileoutput", "false"));
     if (!shouldLog) {
       log = null;
@@ -142,17 +153,24 @@ public class OneMeasurementHdrHistogram extends OneMeasurement {
 
   /**
    * This is called periodically from the StatusThread. There's a single
-   * StatusThread per Client process. We optionally serialize the interval to
-   * log on this opportunity.
+   * StatusThread per Client process. We optionally serialize the interval to log
+   * on this opportunity.
+   * 
+   * @throws IOException
    *
    * @see site.ycsb.measurements.OneMeasurement#getSummary()
    */
   @Override
   public String getSummary() {
+    String buckets = "";
+
     Histogram intervalHistogram = getIntervalHistogramAndAccumulate();
     // we use the summary interval as the histogram file interval.
     if (histogramLogWriter != null) {
       histogramLogWriter.outputIntervalHistogram(intervalHistogram);
+    }
+    if (addstatus) {
+      buckets += getStatusCounts();
     }
 
     DecimalFormat d = new DecimalFormat("#.##");
@@ -161,7 +179,7 @@ public class OneMeasurementHdrHistogram extends OneMeasurement {
         + d.format(intervalHistogram.getMean()) + ", 90=" + d.format(intervalHistogram.getValueAtPercentile(90))
         + ", 99=" + d.format(intervalHistogram.getValueAtPercentile(99)) + ", 99.9="
         + d.format(intervalHistogram.getValueAtPercentile(99.9)) + ", 99.99="
-        + d.format(intervalHistogram.getValueAtPercentile(99.99)) + "]";
+        + d.format(intervalHistogram.getValueAtPercentile(99.99)) + buckets +"]";
   }
 
   private Histogram getIntervalHistogramAndAccumulate() {
