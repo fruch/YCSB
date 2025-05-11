@@ -19,13 +19,15 @@ package site.ycsb.db;
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
 import com.amazonaws.ClientConfiguration;
-import com.amazonaws.auth.AWSCredentials;
+import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.PropertiesCredentials;
-import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClient;
+import com.amazonaws.client.builder.AwsClientBuilder;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDB;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder;
 import com.amazonaws.services.dynamodbv2.model.*;
-import site.ycsb.*;
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
+import site.ycsb.*;
 
 import java.io.File;
 import java.util.HashMap;
@@ -35,7 +37,7 @@ import java.util.Set;
 import java.util.Vector;
 
 /**
- * DynamoDB v1.10.48 client for YCSB.
+ * DynamoDB client for YCSB.
  */
 
 public class DynamoDBClient extends DB {
@@ -52,7 +54,7 @@ public class DynamoDBClient extends DB {
     HASH_AND_RANGE
   }
 
-  private AmazonDynamoDBClient dynamoDB;
+  private AmazonDynamoDB dynamoDB;
   private String primaryKeyName;
   private PrimaryKeyType primaryKeyType = PrimaryKeyType.HASH;
 
@@ -61,9 +63,12 @@ public class DynamoDBClient extends DB {
   // DynamoDB.Properties file for more details.
   private String hashKeyValue;
   private String hashKeyName;
+  private String ttlKeyName = null;
+  private long ttlDuration;
 
   private boolean consistentRead = false;
-  private String endpoint = "http://dynamodb.us-east-1.amazonaws.com";
+  private String region = "us-east-1";
+  private String endpoint = null;
   private int maxConnects = 50;
   private static final Logger LOGGER = Logger.getLogger(DynamoDBClient.class);
   private static final Status CLIENT_ERROR = new Status("CLIENT_ERROR", "An error occurred on the client.");
@@ -80,9 +85,12 @@ public class DynamoDBClient extends DB {
     String configuredEndpoint = getProperties().getProperty("dynamodb.endpoint", null);
     String credentialsFile = getProperties().getProperty("dynamodb.awsCredentialsFile", null);
     String primaryKey = getProperties().getProperty("dynamodb.primaryKey", null);
+    String ttlKeyConfiguration = getProperties().getProperty("dynamodb.ttlKey", null);
+    String ttlDurationConfiguration = getProperties().getProperty("dynamodb.ttlDuration", null);
     String primaryKeyTypeString = getProperties().getProperty("dynamodb.primaryKeyType", null);
     String consistentReads = getProperties().getProperty("dynamodb.consistentReads", null);
     String connectMax = getProperties().getProperty("dynamodb.connectMax", null);
+    String configuredRegion = getProperties().getProperty("dynamodb.region", null);
 
     if (null != connectMax) {
       this.maxConnects = Integer.parseInt(connectMax);
@@ -94,6 +102,14 @@ public class DynamoDBClient extends DB {
 
     if (null != configuredEndpoint) {
       this.endpoint = configuredEndpoint;
+    }
+
+    if (null != ttlKeyConfiguration && null != ttlDurationConfiguration) {
+      this.ttlKeyName = ttlKeyConfiguration;
+      this.ttlDuration = Integer.parseInt(ttlDurationConfiguration);
+      if (LOGGER.isDebugEnabled()) {
+        LOGGER.debug("ttlKeyName: " + this.ttlKeyName + " ttlDuration: " + this.ttlDuration);
+      }
     }
 
     if (null == primaryKey || primaryKey.length() < 1) {
@@ -123,12 +139,25 @@ public class DynamoDBClient extends DB {
       this.hashKeyValue = getProperties().getProperty("dynamodb.hashKeyValue", DEFAULT_HASH_KEY_VALUE);
     }
 
+    if (null != configuredRegion && configuredRegion.length() > 0) {
+      region = configuredRegion;
+    }
+
     try {
-      AWSCredentials credentials = new PropertiesCredentials(new File(credentialsFile));
-      ClientConfiguration cconfig = new ClientConfiguration();
-      cconfig.setMaxConnections(maxConnects);
-      dynamoDB = new AmazonDynamoDBClient(credentials, cconfig);
-      dynamoDB.setEndpoint(this.endpoint);
+      AmazonDynamoDBClientBuilder dynamoDBBuilder = AmazonDynamoDBClientBuilder.standard();
+      dynamoDBBuilder = null == endpoint ?
+          dynamoDBBuilder.withRegion(this.region) :
+          dynamoDBBuilder.withEndpointConfiguration(
+              new AwsClientBuilder.EndpointConfiguration(this.endpoint, this.region)
+          );
+      dynamoDB = dynamoDBBuilder
+          .withClientConfiguration(
+              new ClientConfiguration()
+                  .withTcpKeepAlive(true)
+                  .withMaxConnections(this.maxConnects)
+          )
+          .withCredentials(new AWSStaticCredentialsProvider(new PropertiesCredentials(new File(credentialsFile))))
+          .build();
       primaryKeyName = primaryKey;
       LOGGER.info("dynamodb connection created with " + this.endpoint);
     } catch (Exception e1) {
@@ -239,6 +268,12 @@ public class DynamoDBClient extends DB {
       attributes.put(val.getKey(), new AttributeValueUpdate().withValue(v).withAction("PUT"));
     }
 
+    if (null != this.ttlKeyName) {
+      AttributeValue v = new AttributeValue().withN(
+          String.valueOf((System.currentTimeMillis() / 1000L) + this.ttlDuration));
+      attributes.put(this.ttlKeyName, new AttributeValueUpdate().withValue(v).withAction("PUT"));
+    }
+
     UpdateItemRequest req = new UpdateItemRequest(table, createPrimaryKey(key), attributes);
 
     try {
@@ -267,6 +302,11 @@ public class DynamoDBClient extends DB {
       // into the attributes map above is the range key part of the primary
       // key, we still need to put in the hash key part here.
       attributes.put(hashKeyName, new AttributeValue(hashKeyValue));
+    }
+
+    if (null != this.ttlKeyName) {
+      attributes.put(this.ttlKeyName, new AttributeValue().withN(
+          String.valueOf((System.currentTimeMillis() / 1000L) + this.ttlDuration)));
     }
 
     PutItemRequest putItemRequest = new PutItemRequest(table, attributes);
